@@ -1,0 +1,29 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# Build artifacts & Binaries
+build/
+dist/*.exe
+*.exe
+
+# IDE & OS specific
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Testing & Logs
+.pytest_cache/
+*.log
+dist/
+build/
+
