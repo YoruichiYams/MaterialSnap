@@ -198,3 +198,56 @@ class IconGenerator:
 
         painter.end()
         return QIcon(pix)
+
+    @staticmethod
+    def create_ocr_icon(size: int = 24, color: str = "#FFFFFF") -> QIcon:
+        pix = QPixmap(size, size)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        pen = QPen(QColor(color), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+
+        s = size
+        # 4 Corner Scanner Brackets
+        c_len = s * 0.16
+        # Top-Left Bracket
+        tl = QPainterPath()
+        tl.moveTo(s * 0.18, s * 0.18 + c_len)
+        tl.lineTo(s * 0.18, s * 0.18)
+        tl.lineTo(s * 0.18 + c_len, s * 0.18)
+        painter.drawPath(tl)
+
+        # Top-Right Bracket
+        tr = QPainterPath()
+        tr.moveTo(s * 0.82 - c_len, s * 0.18)
+        tr.lineTo(s * 0.82, s * 0.18)
+        tr.lineTo(s * 0.82, s * 0.18 + c_len)
+        painter.drawPath(tr)
+
+        # Bottom-Left Bracket
+        bl = QPainterPath()
+        bl.moveTo(s * 0.18, s * 0.82 - c_len)
+        bl.lineTo(s * 0.18, s * 0.82)
+        bl.lineTo(s * 0.18 + c_len, s * 0.82)
+        painter.drawPath(bl)
+
+        # Bottom-Right Bracket
+        br = QPainterPath()
+        br.moveTo(s * 0.82 - c_len, s * 0.82)
+        br.lineTo(s * 0.82, s * 0.82)
+        br.lineTo(s * 0.82, s * 0.82 - c_len)
+        painter.drawPath(br)
+
+        # Crisp Centered 'T' (Text glyph)
+        t_pen = QPen(QColor(color), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(t_pen)
+        # Top horizontal bar of T
+        painter.drawLine(QPointF(s * 0.32, s * 0.36), QPointF(s * 0.68, s * 0.36))
+        # Vertical stem of T
+        painter.drawLine(QPointF(s * 0.5, s * 0.36), QPointF(s * 0.5, s * 0.68))
+
+        painter.end()
+        return QIcon(pix)

@@ -66,6 +66,8 @@ class PillFrame(QFrame):
     def _cache_icons(self):
         """Pre-renders white and dark vector icons as QPixmaps."""
         self.icons = {
+            "ocr_white": IconGenerator.create_ocr_icon(18, "#FFFFFF").pixmap(QSize(18, 18)),
+            "ocr_dark": IconGenerator.create_ocr_icon(18, "#161719").pixmap(QSize(18, 18)),
             "copy_white": IconGenerator.create_copy_icon(18, "#FFFFFF").pixmap(QSize(18, 18)),
             "copy_dark": IconGenerator.create_copy_icon(18, "#161719").pixmap(QSize(18, 18)),
             "save_white": IconGenerator.create_save_icon(18, "#FFFFFF").pixmap(QSize(18, 18)),
@@ -219,6 +221,7 @@ class PillFrame(QFrame):
         fm = painter.fontMetrics()
 
         items = [
+            (getattr(self, 'btn_ocr', None), "ocr", "Text"),
             (getattr(self, 'btn_copy', None), "copy", "Copy"),
             (getattr(self, 'btn_save', None), "save", "Save"),
             (getattr(self, 'btn_full', None), "full", ""),
@@ -255,6 +258,7 @@ class ActionPillWidget(QWidget):
     """
     Material You floating action pill with dual-layer masked color inversion and zero tooltips.
     """
+    sig_ocr = Signal()
     sig_copy = Signal()
     sig_save = Signal(bool)
     sig_fullscreen = Signal()
@@ -288,14 +292,21 @@ class ActionPillWidget(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(0)
 
-        # 1. Copy Button (No Tooltips)
+        # 1. OCR / Text Extraction Button (No Tooltips)
+        self.btn_ocr = ActionButton("Text", self.frame)
+        self.btn_ocr.setMinimumWidth(72)
+        self.btn_ocr.clicked.connect(self.sig_ocr.emit)
+        layout.addWidget(self.btn_ocr)
+        self.frame.btn_ocr = self.btn_ocr
+
+        # 2. Copy Button (No Tooltips)
         self.btn_copy = ActionButton("Copy", self.frame)
         self.btn_copy.setMinimumWidth(72)
         self.btn_copy.clicked.connect(self.sig_copy.emit)
         layout.addWidget(self.btn_copy)
         self.frame.btn_copy = self.btn_copy
 
-        # 2. Save Button (No Tooltips)
+        # 3. Save Button (No Tooltips)
         self.btn_save = ActionButton("Save", self.frame)
         self.btn_save.setMinimumWidth(72)
         self.btn_save.clicked.connect(lambda: self._on_save_clicked(False))
@@ -314,14 +325,14 @@ class ActionPillWidget(QWidget):
         layout.addWidget(self.divider)
         self.frame.divider = self.divider
 
-        # 3. Fullscreen Quick Button (No Tooltips)
+        # 4. Fullscreen Quick Button (No Tooltips)
         self.btn_full = ActionButton("", self.frame)
         self.btn_full.setMinimumWidth(38)
         self.btn_full.clicked.connect(self.sig_fullscreen.emit)
         layout.addWidget(self.btn_full)
         self.frame.btn_full = self.btn_full
 
-        # 4. Cancel Button (No Tooltips)
+        # 5. Cancel Button (No Tooltips)
         self.btn_cancel = ActionButton("", self.frame)
         self.btn_cancel.setMinimumWidth(38)
         self.btn_cancel.clicked.connect(self.sig_cancel.emit)
@@ -331,7 +342,7 @@ class ActionPillWidget(QWidget):
         main_layout.addWidget(self.frame)
 
         # Event filtering for motion tracking and blocking tooltip popups
-        self.buttons = [self.btn_copy, self.btn_save, self.btn_full, self.btn_cancel]
+        self.buttons = [self.btn_ocr, self.btn_copy, self.btn_save, self.btn_full, self.btn_cancel]
         for btn in self.buttons:
             btn.installEventFilter(self)
         self.frame.installEventFilter(self)

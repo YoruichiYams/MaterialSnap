@@ -73,13 +73,18 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         fallback_palette = get_wave_palette("NonExistentTheme_12345")
         self.assertEqual(fallback_palette, WAVE_THEMES[DEFAULT_WAVE_THEME])
 
-        # ConfigManager integration
-        cm = ConfigManager()
+        # ConfigManager integration (isolated path)
+        temp_cfg = BASE_DIR / "temp_wave_cfg.json"
+        if temp_cfg.exists():
+            temp_cfg.unlink()
+        cm = ConfigManager(str(temp_cfg))
         self.assertEqual(cm.get("wave_theme"), DEFAULT_WAVE_THEME)
 
         # Setting and getting a valid theme
         cm.set("wave_theme", "Neon Sunset")
         self.assertEqual(cm.get("wave_theme"), "Neon Sunset")
+        if temp_cfg.exists():
+            temp_cfg.unlink()
 
         # FluidMeshGradient theme update
         fluid = FluidMeshGradient(theme_name="Forest Mist")
@@ -103,11 +108,16 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         folder_icon = IconGenerator.create_folder_icon(24)
         self.assertFalse(folder_icon.isNull())
 
+        ocr_icon = IconGenerator.create_ocr_icon(24)
+        self.assertFalse(ocr_icon.isNull())
+
     def test_action_pill_widget(self):
         pill = ActionPillWidget()
+        self.assertIsNotNone(pill.btn_ocr)
         self.assertIsNotNone(pill.btn_copy)
         self.assertIsNotNone(pill.btn_save)
         self.assertIsNotNone(pill.btn_cancel)
+        self.assertIsNotNone(pill.sig_ocr)
 
         # Test smart positioning
         selection = QRect(100, 100, 400, 300)
@@ -131,6 +141,11 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         t3 = show_quick_toast("Saved to Screenshots • Click to open", folder_to_open=str(BASE_DIR), icon_type="folder")
         self.assertIsNotNone(t3)
         self.assertIn("Saved to Screenshots", t3.msg_label.text())
+
+        # 4. OCR Toast
+        t4 = show_quick_toast("Text copied to clipboard • 24 characters", icon_type="ocr")
+        self.assertIsNotNone(t4)
+        self.assertEqual(t4.msg_label.text(), "Text copied to clipboard • 24 characters")
 
     def test_overlay_creation_and_memory_cleanup(self):
         cm = ConfigManager()
@@ -251,6 +266,26 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         filename = CaptureEngine.generate_filename("C:\\ValidDir", prefix="../../hacked_prefix", ext="..\\exe")
         self.assertTrue(".." not in filename)
         self.assertTrue("hacked_prefix" in filename)
+
+    def test_ocr_subsystem_and_shortcuts(self):
+        from src.capture.ocr_engine import OCREngine, normalize_ocr_text
+        self.assertTrue(OCREngine.is_available())
+        self.assertEqual(normalize_ocr_text("  hello \n\n world  "), "hello\n\nworld")
+        
+        # Test overlay OCR invocation without crash
+        cm = ConfigManager()
+        overlay = ScreenshotOverlay(cm)
+        dummy = QPixmap(200, 100)
+        dummy.fill(Qt.white)
+        overlay.bg_pixmap = dummy
+        overlay.has_selection = True
+        overlay.selection_rect = QRect(10, 10, 100, 50)
+        
+        # Trigger OCR flow
+        overlay._do_ocr()
+        self.assertTrue(overlay.bg_pixmap.isNull())
+        if hasattr(overlay, '_active_ocr_worker') and overlay._active_ocr_worker:
+            overlay._active_ocr_worker.wait(3000)
 
 if __name__ == "__main__":
     unittest.main()

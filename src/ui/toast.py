@@ -76,6 +76,8 @@ class ToastWidget(QWidget):
             pix = IconGenerator.create_folder_icon(18, "#FFFFFF").pixmap(18, 18)
         elif icon_type == "copy":
             pix = IconGenerator.create_copy_icon(18, "#FFFFFF").pixmap(18, 18)
+        elif icon_type in ("ocr", "text"):
+            pix = IconGenerator.create_ocr_icon(18, "#FFFFFF").pixmap(18, 18)
         elif icon_type == "app":
             pix = IconGenerator.create_app_icon(18).pixmap(18, 18)
         else:

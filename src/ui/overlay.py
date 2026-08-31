@@ -2,7 +2,7 @@ import os
 import gc
 import math
 from pathlib import Path
-from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QSize, Signal, QTimer
+from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QSize, Signal, QTimer, QThreadPool
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPixmap, QImage, QPainterPath, 
     QLinearGradient, QFont, QCursor, QKeySequence, QGuiApplication
@@ -17,6 +17,7 @@ from .action_pill import ActionPillWidget
 from .toast import show_quick_toast
 from .fluid_mesh import FluidMeshGradient
 from ..utils.path_security import validate_save_directory, sanitize_filename
+from ..capture.ocr_engine import OCRWorker
 
 class HeaderBadge(QWidget):
     """
@@ -93,6 +94,7 @@ class ScreenshotOverlay(QWidget):
         # Floating Action Pill
         self.action_pill = ActionPillWidget(self)
         self.action_pill.hide()
+        self.action_pill.sig_ocr.connect(self._do_ocr)
         self.action_pill.sig_copy.connect(self._do_copy)
         self.action_pill.sig_save.connect(self._do_save)
         self.action_pill.sig_fullscreen.connect(self._do_select_fullscreen)
@@ -162,6 +164,38 @@ class ScreenshotOverlay(QWidget):
             r = self.selection_rect.normalized()
             return self.bg_pixmap.copy(r)
         return self.bg_pixmap
+
+    def _do_ocr(self):
+        """Extracts text from selection asynchronously and copies directly to clipboard."""
+        crop = self._get_active_crop()
+        if crop.isNull():
+            self.close_overlay()
+            return
+
+        # Multi-Monitor DPI: extract full fidelity QImage
+        qimage = crop.toImage()
+        self.close_overlay()
+
+        def on_ocr_success(text: str):
+            if text and text.strip():
+                clean_text = text.strip()
+                clipboard = QApplication.clipboard()
+                clipboard.setText(clean_text)
+                char_count = len(clean_text)
+                show_quick_toast(f"Text recognized & copied • {char_count} characters", icon_type="ocr")
+            else:
+                show_quick_toast("No readable text detected", icon_type="ocr")
+
+        def on_ocr_error(err_msg: str):
+            print(f"[Overlay] OCR extraction error: {err_msg}")
+            show_quick_toast("Text recognition failed")
+
+        worker = OCRWorker(qimage)
+        worker.sig_finished.connect(on_ocr_success)
+        worker.sig_error.connect(on_ocr_error)
+        self._active_ocr_worker = worker
+        worker.finished.connect(lambda: setattr(self, '_active_ocr_worker', None))
+        worker.start()
 
     def _do_copy(self):
         """Copies selection to clipboard and shows toast."""
@@ -280,6 +314,8 @@ class ScreenshotOverlay(QWidget):
             self._do_save(prompt)
         elif key == Qt.Key_F:
             self._do_select_fullscreen()
+        elif key in (Qt.Key_T, Qt.Key_O):
+            self._do_ocr()
         else:
             super().keyPressEvent(event)
 
