@@ -99,10 +99,17 @@ class HotkeyListener(QObject):
         self.start()
 
     def stop(self):
-        """Stops background hotkey listener cleanly."""
+        """Stops background hotkey listener cleanly and joins thread to prevent contention."""
         if self._listener:
             try:
                 self._listener.stop()
             except Exception:
                 pass
             self._listener = None
+
+        if self._thread and self._thread.is_alive() and self._thread != threading.current_thread():
+            try:
+                self._thread.join(timeout=1.0)
+            except Exception:
+                pass
+            self._thread = None

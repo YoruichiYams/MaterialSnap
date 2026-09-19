@@ -2,12 +2,13 @@
     "save_directory": "C:\\Users\\Gleb\\Pictures\\Screenshots",
     "auto_copy_clipboard": true,
     "hotkey": "Ctrl+Shift+S",
-    "autostart": false,
+    "autostart": true,
     "sound_feedback": true,
-    "show_magnifier": true,
+    "show_magnifier": false,
     "show_title": true,
     "enable_fluid_wave": true,
-    "wave_theme": "Neon Sunset",
+    "wave_theme": "Samsung Aura",
+    "wave_texture_mode": "Acrylic",
     "save_format": "PNG",
     "theme": "dark"
 }

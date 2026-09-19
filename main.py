@@ -13,13 +13,13 @@ from src.utils.dpi import enable_hidpi_awareness
 enable_hidpi_awareness()
 
 from PySide6.QtCore import Qt, QObject, Slot
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from src.config.config_manager import ConfigManager
 from src.capture.capture_engine import CaptureEngine
-from src.ui.styles import COLORS
+from src.ui.styles import COLORS, GLOBAL_STYLE, get_application_stylesheet
 from src.ui.icon_generator import IconGenerator
 from src.ui.overlay import ScreenshotOverlay
 from src.ui.tray_manager import TrayManager
@@ -41,6 +41,10 @@ class MaterialSnapApp(QObject):
         self.config_manager = ConfigManager()
         self._is_capturing = False
 
+        # Apply active theme stylesheet
+        active_theme = self.config_manager.get("theme", "dark")
+        self.app.setStyleSheet(get_application_stylesheet(active_theme))
+
         # 2. UI Components
         self.overlay = ScreenshotOverlay(self.config_manager)
         self.tray = TrayManager(self.config_manager)
@@ -54,10 +58,17 @@ class MaterialSnapApp(QObject):
         # Connect Tray signals
         self.tray.sig_capture_requested.connect(self.trigger_capture)
         self.tray.sig_hotkey_changed.connect(self.hotkey_listener.update_hotkey)
-        self.tray.sig_settings_updated.connect(self.overlay.reload_config)
+        self.tray.sig_settings_updated.connect(self._on_settings_updated)
 
         # Ensure assets directory and icon exist
         self._ensure_app_assets()
+
+    def _on_settings_updated(self):
+        """Propagates settings and theme changes across all application subsystems."""
+        active_theme = self.config_manager.get("theme", "dark")
+        self.app.setStyleSheet(get_application_stylesheet(active_theme))
+        self.tray.set_theme(active_theme)
+        self.overlay.reload_config()
 
     def _ensure_app_assets(self):
         """Generates and saves the application icon to assets/."""
@@ -91,9 +102,19 @@ class MaterialSnapApp(QObject):
             self.overlay.close()
 
 def main():
+    # Configure OpenGL surface format with 8-bit alpha buffer for hardware compositing
+    fmt = QSurfaceFormat()
+    fmt.setAlphaBufferSize(8)
+    fmt.setSamples(0)
+    fmt.setSwapInterval(1)
+    QSurfaceFormat.setDefaultFormat(fmt)
+
     app = QApplication(sys.argv)
     app.setApplicationName("MaterialSnap")
     app.setOrganizationName("MaterialSnap")
+
+    # Apply global Origin UI and MaterialSnap styles
+    app.setStyleSheet(GLOBAL_STYLE)
 
     # Set Window Icon
     app_icon = IconGenerator.create_app_icon(64)

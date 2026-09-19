@@ -83,7 +83,7 @@ def compute_otsu_threshold(img: Image.Image) -> int:
     return threshold
 
 
-def preprocess_for_ocr(image: Union[QImage, QPixmap, Image.Image, bytes]) -> Image.Image:
+def preprocess_for_ocr(image: Union[QImage, QPixmap, Image.Image, bytes], binarize: bool = True) -> Image.Image:
     """
     High-precision, lightweight OCR preprocessing pipeline using Pillow (PIL).
     Maximizes recognition accuracy for code editors, browser text, and dark-mode themes.
@@ -93,7 +93,7 @@ def preprocess_for_ocr(image: Union[QImage, QPixmap, Image.Image, bytes]) -> Ima
     2. Grayscale conversion ('L')
     3. Adaptive upscaling (2x - 2.5x BICUBIC for <600px dimensions)
     4. Polarity detection & inversion (dark theme -> black on white)
-    5. Monochrome contrast (autocontrast) & Otsu threshold binarization
+    5. Monochrome contrast (autocontrast) & optional Otsu threshold binarization
     6. Output format conversion to RGBA for engine compatibility
     """
     if isinstance(image, QImage):
@@ -130,13 +130,17 @@ def preprocess_for_ocr(image: Union[QImage, QPixmap, Image.Image, bytes]) -> Ima
     if mean_lum < 128.0:
         gray = ImageOps.invert(gray)
 
-    # 4. Monochrome Contrast & Thresholding
+    # 4. Monochrome Contrast (autocontrast preserving 8-bit dynamic range)
     gray = ImageOps.autocontrast(gray, cutoff=1)
-    thresh = compute_otsu_threshold(gray)
-    binary = gray.point(lambda p: 255 if p > thresh else 0)
 
-    # 5. Output as RGBA for maximum engine compatibility
-    return binary.convert("RGBA")
+    # 5. Optional binarization (Otsu thresholding)
+    if binarize:
+        thresh = compute_otsu_threshold(gray)
+        binary = gray.point(lambda p: 255 if p > thresh else 0)
+        return binary.convert("RGBA")
+
+    # Return full-fidelity 8-bit grayscale in RGBA container
+    return gray.convert("RGBA")
 
 
 def normalize_ocr_text(text: str) -> str:
@@ -197,26 +201,17 @@ class OCREngine:
         return []
 
     @classmethod
-    def recognize_pil(cls, pil_img: Image.Image, lang: Optional[str] = None, preprocess: bool = True) -> str:
-        """
-        Recognizes text from a PIL Image in-memory using the best available backend.
-        Optionally runs high-precision preprocessing pipeline.
-        """
-        if pil_img.width < 2 or pil_img.height < 2:
-            return ""
-
-        # Run preprocessing pipeline
-        if preprocess:
-            processed_img = preprocess_for_ocr(pil_img)
-        else:
-            processed_img = pil_img.convert("RGBA") if pil_img.mode != "RGBA" else pil_img
+    def _recognize_single(cls, processed_img: Image.Image, lang: Optional[str] = None) -> str:
+        """Executes OCR backend recognition on a preprocessed image."""
+        if processed_img.mode != "RGBA":
+            processed_img = processed_img.convert("RGBA")
 
         # 1. Primary Engine: Windows Native OCR
         if _HAS_WINRT_OCR:
             try:
                 text = cls._recognize_winrt(processed_img, lang)
-                if text.strip():
-                    return normalize_ocr_text(text)
+                if text and text.strip():
+                    return text
             except Exception as e:
                 print(f"[OCREngine] Windows Native OCR failed: {e}")
 
@@ -224,12 +219,41 @@ class OCREngine:
         if _HAS_PYTESSERACT:
             try:
                 text = pytesseract.image_to_string(processed_img, lang=lang or "eng")
-                if text.strip():
-                    return normalize_ocr_text(text)
+                if text and text.strip():
+                    return text
             except Exception as e:
                 print(f"[OCREngine] pytesseract fallback failed: {e}")
 
         return ""
+
+    @classmethod
+    def recognize_pil(cls, pil_img: Image.Image, lang: Optional[str] = None, preprocess: bool = True) -> str:
+        """
+        Recognizes text from a PIL Image in-memory using the best available backend.
+        Applies a Dual-Pass recognition strategy:
+          Pass 1 (Primary): 2x bicubic upscale + contrast normalization preserving full 8-bit subpixel antialiasing
+          Pass 2 (Fallback): Adaptive Otsu binarization if Pass 1 yields no readable text
+        """
+        if pil_img.width < 2 or pil_img.height < 2:
+            return ""
+
+        if not preprocess:
+            raw_text = cls._recognize_single(pil_img, lang)
+            return normalize_ocr_text(raw_text)
+
+        # Pass 1 (Primary): High-fidelity anti-aliased grayscale with contrast enhancement
+        pass1_img = preprocess_for_ocr(pil_img, binarize=False)
+        text1 = cls._recognize_single(pass1_img, lang)
+        if text1 and len(text1.strip()) >= 2:
+            return normalize_ocr_text(text1)
+
+        # Pass 2 (Fallback): Adaptive binarization with Otsu threshold
+        pass2_img = preprocess_for_ocr(pil_img, binarize=True)
+        text2 = cls._recognize_single(pass2_img, lang)
+        if text2 and text2.strip():
+            return normalize_ocr_text(text2)
+
+        return normalize_ocr_text(text1 or "")
 
     @classmethod
     def _recognize_winrt(cls, pil_img: Image.Image, lang: Optional[str] = None) -> str:
@@ -351,6 +375,15 @@ class OCRWorker(QThread):
         return self
 
     def run(self):
+        co_initialized = False
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                res = ctypes.windll.ole32.CoInitializeEx(None, 0x0)  # COINIT_MULTITHREADED = 0x0
+                co_initialized = res in (0, 1) # S_OK or S_FALSE
+            except Exception:
+                pass
+
         try:
             recognized_text = OCREngine.recognize_qimage(self.image, lang=self.lang)
             self.sig_finished.emit(recognized_text)
@@ -359,3 +392,9 @@ class OCRWorker(QThread):
         finally:
             self.image = QImage()
             gc.collect()
+            if co_initialized:
+                try:
+                    import ctypes
+                    ctypes.windll.ole32.CoUninitialize()
+                except Exception:
+                    pass

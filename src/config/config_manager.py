@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 from .themes import WAVE_THEMES, DEFAULT_WAVE_THEME
 
+WAVE_TEXTURE_MODES = ["Acrylic", "Mesh"]
+DEFAULT_WAVE_TEXTURE_MODE = "Acrylic"
+THEME_OPTIONS = ["dark", "light"]
+DEFAULT_THEME = "dark"
+
 DEFAULT_CONFIG = {
     "save_directory": str(Path.home() / "Pictures" / "Screenshots"),
     "auto_copy_clipboard": True,
@@ -14,6 +19,7 @@ DEFAULT_CONFIG = {
     "show_title": True,
     "enable_fluid_wave": True,
     "wave_theme": DEFAULT_WAVE_THEME,
+    "wave_texture_mode": DEFAULT_WAVE_TEXTURE_MODE,
     "save_format": "PNG",
     "theme": "dark"
 }
@@ -52,6 +58,14 @@ class ConfigManager:
         if self._config.get("wave_theme") not in WAVE_THEMES:
             self._config["wave_theme"] = DEFAULT_WAVE_THEME
 
+        # Validate wave_texture_mode
+        if self._config.get("wave_texture_mode") not in WAVE_TEXTURE_MODES:
+            self._config["wave_texture_mode"] = DEFAULT_WAVE_TEXTURE_MODE
+
+        # Validate theme
+        if self._config.get("theme") not in THEME_OPTIONS:
+            self._config["theme"] = DEFAULT_THEME
+
         # Ensure screenshot directory exists and is writable
         try:
             from ..utils.path_security import validate_save_directory
@@ -74,6 +88,10 @@ class ConfigManager:
         val = self._config.get(key, default)
         if key == "wave_theme" and val not in WAVE_THEMES:
             return DEFAULT_WAVE_THEME
+        if key == "wave_texture_mode" and val not in WAVE_TEXTURE_MODES:
+            return DEFAULT_WAVE_TEXTURE_MODE
+        if key == "theme" and val not in THEME_OPTIONS:
+            return DEFAULT_THEME
         return val
 
     def set(self, key: str, value):

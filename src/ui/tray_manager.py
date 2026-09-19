@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Qt
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtGui import QIcon, QAction, QColor
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
-from .styles import FONT_FAMILY, COLORS
+from .styles import FONT_FAMILY, get_menu_style, get_theme_tokens
 from .icon_generator import IconGenerator
 from .settings_dialog import SettingsDialog
 from ..utils.autostart import is_autostart_enabled, set_autostart
@@ -11,7 +11,7 @@ from ..utils.autostart import is_autostart_enabled, set_autostart
 class TrayManager(QObject):
     """
     Manages the Windows System Tray Icon, context menu, and background lifecycle
-    with strict monochromatic neutral dark-gray aesthetic.
+    matching the shadcn/Origin UI aesthetic with dynamic theme adaptation.
     """
     sig_capture_requested = Signal()
     sig_hotkey_changed = Signal(str)
@@ -23,54 +23,43 @@ class TrayManager(QObject):
         self.tray_icon = None
         self.tray_menu = None
         self.settings_dialog = None
+        self._current_theme = self.config_manager.get("theme", "dark")
 
         self._init_tray()
 
+    def _create_menu(self) -> QMenu:
+        menu = QMenu()
+        menu.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        menu.setAttribute(Qt.WA_TranslucentBackground, True)
+        tokens = get_theme_tokens(self._current_theme)
+        pal = menu.palette()
+        pal.setColor(pal.ColorRole.Text, QColor(tokens["text_primary"]))
+        pal.setColor(pal.ColorRole.WindowText, QColor(tokens["text_primary"]))
+        menu.setPalette(pal)
+        menu.setStyleSheet(get_menu_style(self._current_theme))
+        return menu
+
     def _init_tray(self):
-        # Generate monochromatic icon
         app_icon = IconGenerator.create_app_icon(32)
 
         self.tray_icon = QSystemTrayIcon(app_icon, self)
         self.tray_icon.setToolTip("MaterialSnap — Screenshot Utility")
 
-        # Build Context Menu
-        self.tray_menu = QMenu()
-        self.tray_menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {COLORS['menu_bg']};
-                color: #FFFFFF;
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 14px;
-                padding: 6px;
-                font-family: {FONT_FAMILY};
-                font-size: 13px;
-                font-weight: 500;
-            }}
-            QMenu::item {{
-                padding: 8px 24px 8px 14px;
-                border-radius: 8px;
-            }}
-            QMenu::item:selected {{
-                background-color: rgba(255, 255, 255, 0.08);
-                color: #FFFFFF;
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background: {COLORS['menu_separator']};
-                margin: 4px 8px;
-            }}
-        """)
+        # Build Context Menu with translucent background and frameless window hint
+        self.tray_menu = self._create_menu()
+
+        tokens = get_theme_tokens(self._current_theme)
 
         # Capture Action
         hk = self.config_manager.get("hotkey", "Ctrl+Shift+S")
         self.action_capture = QAction(f"Capture Screenshot ({hk})", self)
-        self.action_capture.setIcon(IconGenerator.create_copy_icon(18, "#FFFFFF"))
+        self.action_capture.setIcon(IconGenerator.create_copy_icon(16, tokens["text_primary"]))
         self.action_capture.triggered.connect(self.sig_capture_requested.emit)
         self.tray_menu.addAction(self.action_capture)
 
         # Open Folder Action
         self.action_folder = QAction("Open Screenshots Folder", self)
-        self.action_folder.setIcon(IconGenerator.create_folder_icon(18, "#FFFFFF"))
+        self.action_folder.setIcon(IconGenerator.create_folder_icon(16, tokens["text_primary"]))
         self.action_folder.triggered.connect(self._open_screenshots_folder)
         self.tray_menu.addAction(self.action_folder)
 
@@ -92,6 +81,7 @@ class TrayManager(QObject):
 
         # Settings Dialog Action
         self.action_settings = QAction("Settings...", self)
+        self.action_settings.setIcon(IconGenerator.create_settings_icon(16, tokens["text_primary"]))
         self.action_settings.triggered.connect(self._open_settings)
         self.tray_menu.addAction(self.action_settings)
 
@@ -108,8 +98,20 @@ class TrayManager(QObject):
         self.tray_icon.activated.connect(self._on_tray_activated)
         self.tray_icon.show()
 
+    def set_theme(self, theme: str):
+        self._current_theme = theme
+        tokens = get_theme_tokens(theme)
+        pal = self.tray_menu.palette()
+        pal.setColor(pal.ColorRole.Text, QColor(tokens["text_primary"]))
+        pal.setColor(pal.ColorRole.WindowText, QColor(tokens["text_primary"]))
+        self.tray_menu.setPalette(pal)
+        self.tray_menu.setStyleSheet(get_menu_style(theme))
+        self.action_capture.setIcon(IconGenerator.create_copy_icon(16, tokens["text_primary"]))
+        self.action_folder.setIcon(IconGenerator.create_folder_icon(16, tokens["text_primary"]))
+        self.action_settings.setIcon(IconGenerator.create_settings_icon(16, tokens["text_primary"]))
+
     def _on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.Trigger: # Single click
+        if reason == QSystemTrayIcon.Trigger:
             self.sig_capture_requested.emit()
 
     def _open_screenshots_folder(self):
@@ -128,18 +130,18 @@ class TrayManager(QObject):
         self.config_manager.set("autostart", checked)
 
     def _open_settings(self):
-        if not self.settings_dialog:
-            self.settings_dialog = SettingsDialog(self.config_manager)
-            self.settings_dialog.sig_settings_updated.connect(self._on_settings_saved)
-        self.settings_dialog.show()
-        self.settings_dialog.raise_()
-        self.settings_dialog.activateWindow()
+        dialog = SettingsDialog(self.config_manager)
+        dialog.sig_settings_updated.connect(self._on_settings_saved)
+        dialog.exec()
 
     def _on_settings_saved(self):
-        # Refresh hotkey text and menu states
         hk = self.config_manager.get("hotkey", "Ctrl+Shift+S")
         self.action_capture.setText(f"Capture Screenshot ({hk})")
         self.action_auto_copy.setChecked(self.config_manager.get("auto_copy_clipboard", True))
         self.action_autostart.setChecked(is_autostart_enabled())
+        
+        active_theme = self.config_manager.get("theme", "dark")
+        self.set_theme(active_theme)
+        
         self.sig_hotkey_changed.emit(hk)
         self.sig_settings_updated.emit()

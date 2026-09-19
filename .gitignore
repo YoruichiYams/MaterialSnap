@@ -11,7 +11,7 @@ env/
 
 # Build artifacts & Binaries
 build/
-dist/*.exe
+dist/
 *.exe
 
 # IDE & OS specific
@@ -20,10 +20,10 @@ dist/*.exe
 *.swp
 Thumbs.db
 Desktop.ini
+.gemini/
 
-# Testing & Logs
+# Testing & Logs & Scratch
 .pytest_cache/
 *.log
-dist/
-build/
-
+scratch/
+test*.json

@@ -2,39 +2,58 @@ import os
 import gc
 import math
 from pathlib import Path
-from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QSize, Signal, QTimer, QThreadPool
+from PySide6.QtCore import Qt, QRect, QRectF, QPoint, QPointF, QSize, Signal, QTimer, QThreadPool
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPixmap, QImage, QPainterPath, 
     QLinearGradient, QFont, QCursor, QKeySequence, QGuiApplication
 )
 from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QLabel, QApplication, QFileDialog,
-    QGraphicsDropShadowEffect
+    QGraphicsDropShadowEffect, QPushButton
 )
-from .styles import COLORS, HEADER_TITLE_STYLE, FONT_FAMILY
+from .styles import COLORS, HEADER_TITLE_STYLE, FONT_FAMILY, get_theme_tokens
 from .icon_generator import IconGenerator
 from .action_pill import ActionPillWidget
-from .toast import show_quick_toast
-from .fluid_mesh import FluidMeshGradient
+from .toast import show_quick_toast, ToastManager
+from .fluid_mesh import FluidMeshShaderWidget, FluidMeshGradient
 from ..utils.path_security import validate_save_directory, sanitize_filename
 from ..capture.ocr_engine import OCRWorker
+from ..config.themes import DEFAULT_WAVE_THEME, WAVE_THEMES
 
 class HeaderBadge(QWidget):
     """
     Clean, uncluttered top-left header with large bold Google Sans Flex typography.
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, theme: str = "dark"):
         super().__init__(parent)
+        self.setWindowFlags(Qt.SubWindow | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self._theme = theme
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         self.title_lbl = QLabel("MaterialSnap", self)
         self.title_lbl.setObjectName("HeaderTitleLarge")
+
+        # Soft text glow/shadow for crisp readability
+        self.shadow = QGraphicsDropShadowEffect(self.title_lbl)
+        self.shadow.setBlurRadius(20)
+        self.shadow.setOffset(0, 3)
+        self.title_lbl.setGraphicsEffect(self.shadow)
+
+        self.set_theme(theme)
+        layout.addWidget(self.title_lbl)
+
+    def set_theme(self, theme: str):
+        self._theme = theme
+        tokens = get_theme_tokens(theme)
+        text_col = tokens["text_primary"]
+        shadow_col = QColor(0, 0, 0, 30) if theme == "light" else QColor(0, 0, 0, 190)
         self.title_lbl.setStyleSheet(f"""
             QLabel#HeaderTitleLarge {{
-                color: #FFFFFF;
+                color: {text_col};
                 font-family: {FONT_FAMILY};
                 font-size: 28px;
                 font-weight: 800;
@@ -42,15 +61,8 @@ class HeaderBadge(QWidget):
                 background: transparent;
             }}
         """)
+        self.shadow.setColor(shadow_col)
 
-        # Soft text glow/shadow for crisp readability
-        shadow = QGraphicsDropShadowEffect(self.title_lbl)
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 190))
-        shadow.setOffset(0, 3)
-        self.title_lbl.setGraphicsEffect(shadow)
-
-        layout.addWidget(self.title_lbl)
 
 class ScreenshotOverlay(QWidget):
     """
@@ -61,6 +73,7 @@ class ScreenshotOverlay(QWidget):
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
+        self._current_theme = self.config_manager.get("theme", "dark")
         
         # Window attributes for multi-screen seamless overlay
         self.setWindowFlags(
@@ -71,6 +84,7 @@ class ScreenshotOverlay(QWidget):
         )
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
 
@@ -86,7 +100,9 @@ class ScreenshotOverlay(QWidget):
         self.has_selection = False
 
         # Top-left Minimalist Header
-        self.header_badge = HeaderBadge(self)
+        self.header_badge = HeaderBadge(self, theme=self.config_manager.get("theme", "dark"))
+        self.header_badge.move(24, 20)
+        self.header_badge.raise_()
 
         # Living Acrylic Fluid Mesh Gradient Renderer
         self.fluid_mesh = FluidMeshGradient()
@@ -108,14 +124,20 @@ class ScreenshotOverlay(QWidget):
 
     def _on_anim_tick(self):
         """Advances morphing cloud mesh and selection border animation."""
-        self.anim_phase = (self.anim_phase + 0.0012) % 1.0
+        self.anim_phase += 0.016
         if self.isVisible():
             self.update()
 
     def reload_config(self):
-        """Immediately reloads configuration and updates active wave theme."""
-        theme_name = self.config_manager.get("wave_theme", "Twilight Mauve")
+        """Immediately reloads configuration and updates active wave theme, texture mode, and theme."""
+        theme_name = self.config_manager.get("wave_theme", DEFAULT_WAVE_THEME)
+        texture_mode = self.config_manager.get("wave_texture_mode", "Acrylic")
+        theme = self.config_manager.get("theme", "dark")
+        self._current_theme = theme
         self.fluid_mesh.set_theme(theme_name)
+        self.fluid_mesh.set_texture_mode(texture_mode)
+        self.action_pill.set_theme(theme)
+        self.header_badge.set_theme(theme)
 
     def start_capture(self, composite_pixmap: QPixmap, virtual_rect: QRect):
         """Initializes overlay with fresh screen capture and displays across all displays."""
@@ -126,6 +148,7 @@ class ScreenshotOverlay(QWidget):
         self.has_selection = False
         self.is_dragging = False
         self.action_pill.hide()
+        self.fluid_mesh.set_cursor(0.5, 0.5)
 
         # Set geometry spanning all monitors
         self.setGeometry(virtual_rect)
@@ -133,8 +156,9 @@ class ScreenshotOverlay(QWidget):
         # Position clean header at top-left with generous margin
         if self.config_manager.get("show_title", True):
             self.header_badge.adjustSize()
-            self.header_badge.move(36, 30)
+            self.header_badge.move(24, 20)
             self.header_badge.show()
+            self.header_badge.raise_()
         else:
             self.header_badge.hide()
 
@@ -181,14 +205,13 @@ class ScreenshotOverlay(QWidget):
                 clean_text = text.strip()
                 clipboard = QApplication.clipboard()
                 clipboard.setText(clean_text)
-                char_count = len(clean_text)
-                show_quick_toast(f"Text recognized & copied • {char_count} characters", icon_type="ocr")
+                ToastManager.show("Text extracted and copied", variant="success")
             else:
-                show_quick_toast("No readable text detected", icon_type="ocr")
+                ToastManager.show("Failed to recognize text", variant="error")
 
         def on_ocr_error(err_msg: str):
             print(f"[Overlay] OCR extraction error: {err_msg}")
-            show_quick_toast("Text recognition failed")
+            ToastManager.show("Failed to recognize text", variant="error")
 
         worker = OCRWorker(qimage)
         worker.sig_finished.connect(on_ocr_success)
@@ -203,7 +226,7 @@ class ScreenshotOverlay(QWidget):
         if not crop.isNull():
             clipboard = QApplication.clipboard()
             clipboard.setPixmap(crop)
-            show_quick_toast("Screenshot copied to clipboard", icon_type="copy")
+            ToastManager.show("Copied to clipboard", variant="success")
         self.close_overlay()
 
     def _do_save(self, prompt_custom_folder: bool = False):
@@ -240,11 +263,10 @@ class ScreenshotOverlay(QWidget):
             if self.config_manager.get("auto_copy_clipboard", True):
                 QApplication.clipboard().setPixmap(crop)
 
-            folder_name = target_path.parent.name
-            show_quick_toast(f"Saved to {folder_name} • Click to open", folder_to_open=str(target_path.parent), icon_type="folder")
+            ToastManager.show("Saved to disk", variant="info", folder_to_open=str(target_path.parent))
         except Exception as err:
             print(f"[Overlay] Error saving screenshot: {err}")
-            show_quick_toast("Failed to save screenshot (check permissions)")
+            ToastManager.show("Failed to save screenshot", variant="error")
 
         self.close_overlay()
 
@@ -255,6 +277,9 @@ class ScreenshotOverlay(QWidget):
         self.is_dragging = False
         self.update()
         self.action_pill.position_smartly(self.selection_rect, self.rect())
+        self.action_pill.show()
+        self.action_pill.setWindowOpacity(1.0)
+        self.action_pill.raise_()
 
     # Mouse interaction handlers
     def mousePressEvent(self, event):
@@ -284,6 +309,13 @@ class ScreenshotOverlay(QWidget):
         self.current_pos = event.position().toPoint()
         if self.is_dragging:
             self.selection_rect = QRect(self.start_pos, self.current_pos).normalized()
+        
+        # Pass normalized cursor coordinates (OpenGL UV space: y inverted) to shader
+        if self.width() > 0 and self.height() > 0 and hasattr(self, 'fluid_mesh'):
+            nx = max(0.0, min(1.0, self.current_pos.x() / float(self.width())))
+            ny = max(0.0, min(1.0, 1.0 - (self.current_pos.y() / float(self.height()))))
+            self.fluid_mesh.set_cursor(nx, ny)
+
         self.update()
 
     def mouseReleaseEvent(self, event):
@@ -294,6 +326,9 @@ class ScreenshotOverlay(QWidget):
             if self.selection_rect.width() > 6 and self.selection_rect.height() > 6:
                 self.has_selection = True
                 self.action_pill.position_smartly(self.selection_rect, self.rect())
+                self.action_pill.show()
+                self.action_pill.setWindowOpacity(1.0)
+                self.action_pill.raise_()
             else:
                 self.has_selection = False
                 self.action_pill.hide()
@@ -329,8 +364,12 @@ class ScreenshotOverlay(QWidget):
         if not self.bg_pixmap.isNull():
             painter.drawPixmap(0, 0, self.bg_pixmap)
 
-        # 2. Draw +10% darkened scrim (alpha 140 / ~0.55)
-        scrim_color = QColor(10, 12, 16, 140)
+        # 2. Draw balanced scrim: dark QColor(15, 12, 28, 140) vs light QColor(255, 255, 255, 160)
+        theme = getattr(self, '_current_theme', 'dark')
+        if theme == "light":
+            scrim_color = QColor(255, 255, 255, 160)
+        else:
+            scrim_color = QColor(15, 12, 28, 140)
         
         norm_rect = self.selection_rect.normalized() if (self.is_dragging or self.has_selection) else QRect()
 
@@ -345,16 +384,29 @@ class ScreenshotOverlay(QWidget):
         else:
             scrim_path = full_path
 
-        # Fill Dark Scrim
+        # Fill Scrim
         painter.fillPath(scrim_path, QBrush(scrim_color))
 
-        # 3. Draw Living Acrylic Fluid Mesh Gradient inside Scrim Region (if enabled)
+        # 3. Draw Living Acrylic Fluid Mesh Gradient inside Scrim Region with SourceOver Blending
         if self.config_manager.get("enable_fluid_wave", True):
-            wave_theme = self.config_manager.get("wave_theme", "Twilight Mauve")
+            wave_theme = self.config_manager.get("wave_theme", DEFAULT_WAVE_THEME)
+            texture_mode = self.config_manager.get("wave_texture_mode", "Acrylic")
             painter.save()
             painter.setClipPath(scrim_path)
-            self.fluid_mesh.draw(painter, self.width(), self.height(), self.anim_phase, theme_name=wave_theme)
-            painter.restore()
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            try:
+                self.fluid_mesh.draw(
+                    painter, self.width(), self.height(), self.anim_phase,
+                    theme_name=wave_theme, texture_mode=texture_mode
+                )
+            except Exception as e:
+                print(f"[Overlay] Fluid wave render error: {e}")
+            finally:
+                painter.restore()
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+        # Force CompositionMode_SourceOver for all subsequent UI elements
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
         # 4. Draw Active Selection Border (Refined pearl/pastel gradient)
         if norm_rect.isValid() and norm_rect.width() > 0 and norm_rect.height() > 0:
@@ -370,11 +422,18 @@ class ScreenshotOverlay(QWidget):
 
     def _draw_selection_glow_border(self, painter: QPainter, norm_rect: QRect):
         """
-        Draws dynamic glowing selection border with a smooth, delicate monochromatic gradient
+        Draws dynamic glowing selection border with a smooth, delicate gradient
         gently drifting over time.
         """
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+        theme = getattr(self, '_current_theme', 'dark')
+        is_light = (theme == "light")
+
         # Outer soft ambient glow
-        glow_pen = QPen(QColor(255, 255, 255, 30), 3.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        glow_col = QColor(0, 0, 0, 20) if is_light else QColor(255, 255, 255, 30)
+        glow_pen = QPen(glow_col, 3.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         painter.setPen(glow_pen)
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(norm_rect, 6, 6)
@@ -392,20 +451,28 @@ class ScreenshotOverlay(QWidget):
         x2 = cx - math.cos(angle) * rx
         y2 = cy - math.sin(angle) * ry
 
-        # Strict monochromatic luminous gradient
         grad = QLinearGradient(QPointF(x1, y1), QPointF(x2, y2))
-        grad.setColorAt(0.0, QColor("#FFFFFF"))
-        grad.setColorAt(0.35, QColor("#E8EAED"))
-        grad.setColorAt(0.70, QColor("#D0D3D8"))
-        grad.setColorAt(1.0, QColor("#FFFFFF"))
+        if is_light:
+            grad.setColorAt(0.0, QColor("#18181B"))
+            grad.setColorAt(0.35, QColor("#3F3F46"))
+            grad.setColorAt(0.70, QColor("#71717A"))
+            grad.setColorAt(1.0, QColor("#18181B"))
+        else:
+            grad.setColorAt(0.0, QColor("#FFFFFF"))
+            grad.setColorAt(0.35, QColor("#E8EAED"))
+            grad.setColorAt(0.70, QColor("#D0D3D8"))
+            grad.setColorAt(1.0, QColor("#FFFFFF"))
 
         # Refined crisp stroke
         border_pen = QPen(QBrush(grad), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         painter.setPen(border_pen)
         painter.drawRoundedRect(norm_rect, 6, 6)
+        painter.restore()
 
     def _draw_dimension_chip(self, painter: QPainter, rect: QRect, text: str):
         """Draws dimension chip with capsule rounding and Google Sans Flex."""
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         font = QFont("Google Sans Flex", 10, QFont.DemiBold)
         font.setStyleHint(QFont.SansSerif)
         painter.setFont(font)
@@ -421,26 +488,33 @@ class ScreenshotOverlay(QWidget):
         if chip_y < 10:
             chip_y = rect.bottom() + 6
 
-        chip_rect = QRect(chip_x, chip_y, chip_w, chip_h)
+        chip_rect = QRectF(chip_x + 0.5, chip_y + 0.5, chip_w - 1.0, chip_h - 1.0)
         
+        theme = getattr(self, '_current_theme', 'dark')
+        tokens = get_theme_tokens(theme)
+        is_light = (theme == "light")
+
         # 100% capsule pill rounding
         path = QPainterPath()
-        path.addRoundedRect(chip_rect, chip_h / 2, chip_h / 2)
-        painter.fillPath(path, QColor(24, 25, 28, 225))
-        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
+        path.addRoundedRect(chip_rect, (chip_h - 1.0) / 2, (chip_h - 1.0) / 2)
+        chip_bg = QColor(255, 255, 255, 235) if is_light else QColor(24, 25, 28, 225)
+        painter.fillPath(path, chip_bg)
+        border_color = QColor(tokens["border_subtle"])
+        painter.setPen(QPen(border_color, 1.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         painter.drawPath(path)
 
-        painter.setPen(QColor("#FFFFFF"))
+        painter.setPen(QColor(tokens["text_primary"]))
         painter.drawText(chip_rect, Qt.AlignCenter, text)
+        painter.restore()
 
     def _draw_loupe_magnifier(self, painter: QPainter, pos: QPoint):
         """Draws a pixel magnifier loupe near the cursor."""
         if self.bg_pixmap.isNull():
             return
 
-        size = 110
+        size = 112
         zoom = 8
-        half_src = size // (2 * zoom)
+        half_src = 7
 
         bg_r = self.bg_pixmap.rect()
         src_x = max(0, min(pos.x() - half_src, bg_r.width() - half_src * 2))
@@ -458,7 +532,7 @@ class ScreenshotOverlay(QWidget):
         if ly + size > self.height() - 10:
             ly = pos.y() - size - 24
 
-        loupe_rect = QRect(lx, ly, size, size)
+        loupe_rect = QRectF(lx + 0.5, ly + 0.5, size - 1.0, size - 1.0)
 
         path = QPainterPath()
         path.addRoundedRect(loupe_rect, 14, 14)
@@ -467,28 +541,45 @@ class ScreenshotOverlay(QWidget):
         painter.setClipPath(path)
 
         scaled_img = src_crop.scaled(size, size, Qt.IgnoreAspectRatio, Qt.FastTransformation)
-        painter.drawImage(loupe_rect, scaled_img)
+        painter.drawImage(QRect(lx, ly, size, size), scaled_img)
 
-        center_x = lx + size // 2
-        center_y = ly + size // 2
-        painter.setPen(QPen(QColor(255, 255, 255, 180), 1.2))
-        painter.drawLine(center_x - 8, center_y, center_x + 8, center_y)
-        painter.drawLine(center_x, center_y - 8, center_x, center_y + 8)
+        center_x = float(lx + size / 2.0)
+        center_y = float(ly + size / 2.0)
+
+        # Dual-Stroke High-Contrast Crosshair:
+        # 1. Dark outer shadow for legibility over pure white / light pixels
+        shadow_pen = QPen(QColor(0, 0, 0, 160), 2.4, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(shadow_pen)
+        painter.drawLine(QPointF(center_x - 8, center_y), QPointF(center_x + 8, center_y))
+        painter.drawLine(QPointF(center_x, center_y - 8), QPointF(center_x, center_y + 8))
+
+        # 2. Pure white inner crosshair
+        white_pen = QPen(QColor("#FFFFFF"), 1.2, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(white_pen)
+        painter.drawLine(QPointF(center_x - 8, center_y), QPointF(center_x + 8, center_y))
+        painter.drawLine(QPointF(center_x, center_y - 8), QPointF(center_x, center_y + 8))
 
         sample_x = max(0, min(pos.x() - src_x, src_crop.width() - 1))
         sample_y = max(0, min(pos.y() - src_y, src_crop.height() - 1))
         pixel_color = src_crop.pixelColor(sample_x, sample_y)
         hex_code = pixel_color.name().upper()
 
-        info_rect = QRect(lx, ly + size - 20, size, 20)
-        painter.fillRect(info_rect, QColor(20, 20, 22, 230))
-        painter.setFont(QFont("Consolas", 8, QFont.Bold))
+        # Token-aligned metadata container (#232529 / surface_card)
+        info_rect = QRectF(lx + 0.5, ly + size - 22.5, size - 1.0, 22.0)
+        painter.fillRect(info_rect, QColor(35, 37, 41, 235))
+        painter.setPen(QPen(QColor(COLORS.get("border_divider", "#26292E")), 1.0))
+        painter.drawLine(QPointF(info_rect.left(), info_rect.top()), QPointF(info_rect.right(), info_rect.top()))
+
+        font = QFont("Google Sans Flex", 9, QFont.Bold)
+        font.setStyleHint(QFont.Monospace)
+        painter.setFont(font)
         painter.setPen(QColor("#FFFFFF"))
         painter.drawText(info_rect, Qt.AlignCenter, hex_code)
 
         painter.restore()
 
-        # 1.4px Monochromatic border
-        painter.setPen(QPen(QColor(255, 255, 255, 180), 1.4))
+        # Crisp 1px Monochromatic Solid Border (#2A2D32)
+        solid_border = QColor(COLORS.get("border_solid", "#2A2D32"))
+        painter.setPen(QPen(solid_border, 1.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         painter.setBrush(Qt.NoBrush)
-        painter.drawRoundedRect(loupe_rect, 14, 14)
+        painter.drawPath(path)

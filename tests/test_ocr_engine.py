@@ -5,8 +5,6 @@ import unittest
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-# Force offscreen rendering for headless testing
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
@@ -141,6 +139,7 @@ class TestOCREngine(unittest.TestCase):
         # Timeout after 5 seconds
         QTimer.singleShot(5000, loop.quit)
         loop.exec()
+        worker.wait(3000)
 
         self.assertIsNone(error_msg)
         self.assertIsNotNone(received_text)

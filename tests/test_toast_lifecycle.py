@@ -3,8 +3,6 @@ import sys
 import unittest
 from pathlib import Path
 
-# Force offscreen rendering for headless testing
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:

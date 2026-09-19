@@ -4,9 +4,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# Force offscreen rendering for headless testing
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
@@ -26,7 +23,7 @@ from src.ui.action_pill import ActionPillWidget
 from src.ui.overlay import ScreenshotOverlay
 from src.ui.settings_dialog import SettingsDialog
 from src.ui.tray_manager import TrayManager
-from src.ui.fluid_mesh import FluidMeshGradient
+from src.ui.fluid_mesh import FluidMeshShaderWidget, FluidMeshGradient
 from src.capture.capture_engine import CaptureEngine
 from src.utils.autostart import is_autostart_enabled, set_autostart
 from src.utils.hotkey_listener import HotkeyListener
@@ -56,22 +53,23 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         self.assertTrue(len(TOAST_STYLE) > 0)
 
     def test_wave_theme_palettes_and_fallback(self):
-        # Verify all 6 themes exist and have 4 hex colors
-        expected_themes = [
-            "Twilight Mauve", "Nordic Frost", "Neon Sunset",
-            "Forest Mist", "Pastel Pop", "Deep Ocean"
-        ]
-        for theme_name in expected_themes:
-            self.assertIn(theme_name, WAVE_THEMES)
-            palette = get_wave_palette(theme_name)
-            self.assertEqual(len(palette), 4)
+        # Verify 4 cohesive OLED palettes exist and each has 5 hex colors
+        expected_themes = ["Samsung Aura", "Prism Spectrum", "Solar Flare", "Opal Nebula"]
+        for tname in expected_themes:
+            self.assertIn(tname, WAVE_THEMES)
+            palette = get_wave_palette(tname)
+            self.assertEqual(len(palette), 5)
             for hex_code in palette:
                 self.assertTrue(hex_code.startswith("#"))
                 self.assertEqual(len(hex_code), 7)
 
-        # Fallback handling
+        self.assertEqual(len(WAVE_THEMES), 4)
+
+        # Fallback handling for unknown or legacy theme names
         fallback_palette = get_wave_palette("NonExistentTheme_12345")
         self.assertEqual(fallback_palette, WAVE_THEMES[DEFAULT_WAVE_THEME])
+        legacy_fallback = get_wave_palette("Twilight Mauve")
+        self.assertEqual(legacy_fallback, WAVE_THEMES[DEFAULT_WAVE_THEME])
 
         # ConfigManager integration (isolated path)
         temp_cfg = BASE_DIR / "temp_wave_cfg.json"
@@ -80,17 +78,31 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         cm = ConfigManager(str(temp_cfg))
         self.assertEqual(cm.get("wave_theme"), DEFAULT_WAVE_THEME)
 
-        # Setting and getting a valid theme
-        cm.set("wave_theme", "Neon Sunset")
-        self.assertEqual(cm.get("wave_theme"), "Neon Sunset")
+        # Setting and getting a theme
+        cm.set("wave_theme", "Prism Spectrum")
+        self.assertEqual(cm.get("wave_theme"), "Prism Spectrum")
         if temp_cfg.exists():
             temp_cfg.unlink()
 
-        # FluidMeshGradient theme update
-        fluid = FluidMeshGradient(theme_name="Forest Mist")
-        self.assertEqual(fluid._theme_name, "Forest Mist")
-        fluid.set_theme("Deep Ocean")
-        self.assertEqual(fluid._theme_name, "Deep Ocean")
+        # FluidMeshShaderWidget theme, theme_id, and uniform validation
+        fluid = FluidMeshShaderWidget(theme_name="Samsung Aura")
+        self.assertEqual(fluid._theme_name, "Samsung Aura")
+        self.assertEqual(fluid.theme_id, 0)
+        self.assertEqual(fluid.scale, 1.30)
+        self.assertEqual(fluid.intensity, 0.56)
+        self.assertEqual(fluid.warp, 0.192)
+
+        theme_mappings = [
+            ("Samsung Aura", 0),
+            ("Prism Spectrum", 1),
+            ("Solar Flare", 2),
+            ("Opal Nebula", 3)
+        ]
+        for name, expected_id in theme_mappings:
+            fluid.set_theme(name)
+            self.assertEqual(fluid._theme_name, name)
+            self.assertEqual(fluid.theme_id, expected_id)
+            self.assertGreaterEqual(len(fluid._palette_colors), 5)
 
     def test_icon_generator(self):
         icon = IconGenerator.create_app_icon(64)
@@ -147,6 +159,12 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         self.assertIsNotNone(t4)
         self.assertEqual(t4.msg_label.text(), "Text copied to clipboard • 24 characters")
 
+        # Cleanup test toasts to avoid timer conflicts across subsequent tests
+        t1.close_toast()
+        t2.close_toast()
+        t3.close_toast()
+        t4.close_toast()
+
     def test_overlay_creation_and_memory_cleanup(self):
         cm = ConfigManager()
         overlay = ScreenshotOverlay(cm)
@@ -187,18 +205,29 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
             test_cfg.unlink()
 
     def test_settings_dialog(self):
-        cm = ConfigManager()
+        temp_cfg = BASE_DIR / "temp_settings_dlg_cfg.json"
+        if temp_cfg.exists():
+            temp_cfg.unlink()
+        cm = ConfigManager(str(temp_cfg))
         dlg = SettingsDialog(cm)
         self.assertTrue(dlg.edit_dir.text() != "")
         self.assertTrue(dlg.edit_hotkey.text() != "")
         self.assertTrue(dlg.chk_show_title.isChecked())
         self.assertTrue(dlg.chk_fluid_wave.isChecked())
-        self.assertTrue(dlg.combo_wave_theme.count() >= 6)
+        self.assertTrue(dlg.combo_wave_theme.count() >= 1)
+        self.assertEqual(dlg.combo_wave_theme.currentText(), "Samsung Aura")
+        self.assertEqual(dlg.seg_texture_mode.current_mode(), "Acrylic")
+
+        # Test texture style selector
+        dlg.seg_texture_mode.set_mode("Mesh")
+        self.assertEqual(dlg.seg_texture_mode.current_mode(), "Mesh")
 
         # Test custom checkbox toggling
         state = dlg.chk_show_title.isChecked()
         dlg.chk_show_title.setChecked(not state)
         self.assertEqual(dlg.chk_show_title.isChecked(), not state)
+        if temp_cfg.exists():
+            temp_cfg.unlink()
 
     def test_tray_manager(self):
         cm = ConfigManager()
@@ -284,8 +313,10 @@ class TestMaterialSnapFullSuite(unittest.TestCase):
         # Trigger OCR flow
         overlay._do_ocr()
         self.assertTrue(overlay.bg_pixmap.isNull())
-        if hasattr(overlay, '_active_ocr_worker') and overlay._active_ocr_worker:
-            overlay._active_ocr_worker.wait(3000)
+        worker = getattr(overlay, '_active_ocr_worker', None)
+        if worker:
+            worker.wait(5000)
+        QApplication.processEvents()
 
 if __name__ == "__main__":
     unittest.main()
